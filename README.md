@@ -24,6 +24,8 @@ The goals / steps of this project are the following:
 In the following, I will consider each [rubric](https://review.udacity.com/#!/rubrics/571/view) point individually and describe how I addressed it in my implementation.
 
 The entire implementation is contained in the `Advanced_Lane_Lines.ipynb` ipython script.
+The first cells define a number of functions needed for the processing pipeline.
+These are all combined under *Pipeline function (combine all the above)* near the bottom of the script.
 
 ---
 ###Camera Calibration
@@ -75,73 +77,132 @@ An example is shown below.
 ####3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
 The code for this step is contained under *Perspective transform* in `Advanced_Lane_Lines.ipynb`.
 
-I 
+In order to apply a perspective transform (a homography), we need a minimum of 4 source points and 4 destination points.
+The source points are first pointed out manually in an externat image editor.
+The destination points are chosen as a rectangular grid in the warped image.
+The following points have been chosen:
+
+| Source        | Destination   |
+|:-------------:|:-------------:|
+| 1110, 720     | 1000, 730     |
+| 685, 448      | 1000, 0       |
+| 598, 448      | 300, 0        |
+| 217, 720      | 300, 730      |
+
+With these point pairs, I call `cv2.getPerspectiveTransform` to get a transformation matrix `M`.
+And for later use, I also calculate the inverse transformation, `Minv`.
+
+This transformation matrix is then used to warp the undistorted image with the `cv2.warpPerspective` function.
+An example is shown below with source and destination points overlaid on the images.
+Note that for illustrational purposes, I have warped the original image and not the thresholded one. However, the pipeline of course uses the thresholded image to find lane pixels.
 
 ![alt text](output_images/perspective.jpg)
 
-The code for my perspective transform includes a function called `warper()`, which appears in lines 1 through 8 in the file `example.py` (output_images/examples/example.py) (or, for example, in the 3rd code cell of the IPython notebook).  The `warper()` function takes as inputs an image (`img`), as well as source (`src`) and destination (`dst`) points.  I chose the hardcode the source and destination points in the following manner:
-
-```
-src = np.float32(
-    [[(img_size[0] / 2) - 55, img_size[1] / 2 + 100],
-    [((img_size[0] / 6) - 10), img_size[1]],
-    [(img_size[0] * 5 / 6) + 60, img_size[1]],
-    [(img_size[0] / 2 + 55), img_size[1] / 2 + 100]])
-dst = np.float32(
-    [[(img_size[0] / 4), 0],
-    [(img_size[0] / 4), img_size[1]],
-    [(img_size[0] * 3 / 4), img_size[1]],
-    [(img_size[0] * 3 / 4), 0]])
-
-```
-This resulted in the following source and destination points:
-
-| Source        | Destination   | 
-|:-------------:|:-------------:| 
-| 585, 460      | 320, 0        | 
-| 203, 720      | 320, 720      |
-| 1127, 720     | 960, 720      |
-| 695, 460      | 960, 0        |
-
-I verified that my perspective transform was working as expected by drawing the `src` and `dst` points onto a test image and its warped counterpart to verify that the lines appear parallel in the warped image.
-
-![alt text][image4]
 
 ####4. Describe how (and identify where in your code) you identified lane-line pixels and fit their positions with a polynomial?
+The code for identifying lane-line pixels is contained under *Detect lane pixels* in `Advanced_Lane_Lines.ipynb`.
+
+For detecting lane pixels, I use the rectified, thresholded image.
+
+I use the approach suggested by Udacity, to first find initial line positions at the bottom of the image, using a histogram.
+That is, I use the bottom half of the rectified, thresholded image to find two peaks, corresponding to the initial position of the left and right lines, respectively.
+An example histogram illustrating this approach is shown below (left).
+
+I then apply a sliding window for each line from the bottom of the image towards the top.
+The initial positions of the sliding windows correspond to the initial positions found with the histogram.
+Within a window of size 72x160, I find the mean x coordinate of all white pixels in the thresholded image, and center the next window (just above) with this coordinate.
+Effectively, this tracks the lane lines from bottom to top.
+An example is shown below.
 
 ![alt text](output_images/lane_pixels.jpg)
 
-text
+At the same time, all points within the windows are stored in a list, such that they can subsequently be used for fitting a polynomial for each line.
 
-![alt text](output_images/polygons.jpg)
 
-Then I did some other stuff and fit my lane lines with a 2nd order polynomial kinda like this:
+The code for fitting lane-line positions with a polynomial is contained under *Find road boundary* in `Advanced_Lane_Lines.ipynb`.
 
-![alt text][image5]
+For convenience, I first define a `Line` class that contains different parameters for each of the two lines.
+A 2nd order polynomial is then fitted to each line using the lists of all points contained in the sliding windows described above
+For fitting the polynomials, I use the `np.polyfit` function.
+The parameters (A, B and C) are stored for later use in the Line class.
+An example is shown below, where I have fitted a polynomial for each of the two lines (left and right).
+
+![alt text](output_images/polynomials.jpg)
 
 ####5. Describe how (and identify where in your code) you calculated the radius of curvature of the lane and the position of the vehicle with respect to center.
+The code for this step is contained under *Curvature and vehicle position* in `Advanced_Lane_Lines.ipynb`.
 
-I did this in lines # through # in my code in `my_other_file.py`
+In this section I first define two conversion variables for converting between pixels and meters.
+Here, I have used the information provided by Udacity that the lane width is 3.7 m and cropped lane length is 30 m. This defines the two variables:
+
+```
+ym_per_pix = 30/720 # meters per pixel in y dimension
+xm_per_pix = 3.7/680 # meters per pixel in x dimension
+```
+
+I use the above fitted polynomials to calculate a curvature for each of the two lines.
+For this, I use the formula provided by Udacity:
+
+```
+R_curve = (1+(2Ay+B)^2)^(3/2)/|2A|
+```
+
+I then calculate the mean of the two curvatures and report this value.
+
+For the position of the vehicle with respect to center, I evaluate the polynomial functions at the bottom of the image (y=720) to get the initial line positions (`left_start` and `right_start`).
+I then use these values to calculate the center position of the lane:
+
+```
+center_lane = (right_start+left_start)/2
+```
+
+Likewise, as the camera is mounted at the center of the car, I can define the car position as `center_car = 1280/2`.
+Ultimately, I can find the deviation from center as:
+
+```
+position = (center_lane-center_car)*xm_per_pix
+```
 
 ####6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
+The code for this step is contained under *Draw lane and display vehicle status* in `Advanced_Lane_Lines.ipynb`.
+Further, it is used in the following cell, *Pipeline function (combine all the above)* where everything from above is combined in a pipeline.
+Ultimately, all test images are processed in the next cell, *Pipeline (test images)*.
 
-I implemented this step in lines # through # in my code in `yet_another_file.py` in the function `map_lane()`.  Here is an example of my result on a test image:
+Once I have found curvature and position, I draw a lane overlay onto a blank image, same size as the rectified thresholded image.
+This is done by evaluating the two polynomials for all y-values (top-to-bottom) and drawing a polygon with the `cv2.fillPoly` function.
 
-![alt text][image6]
+I then unwarp this rectified image with the inverse transformation `Minv` described above.
+
+Ultimately, I overlay a status text describing the curvature and position of the vehicle.
+An example is shown below.
+The remaining are available in the folder *./output_images/test_images/*.
+
+![alt text](output_images/test_images/test5.jpg)
 
 ---
 
 ###Pipeline (video)
 
 ####1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
+The code for this step is contained under *Pipeline (video)* in `Advanced_Lane_Lines.ipynb`.
 
-Here's a [link to my video result](./project_video.mp4)
+For the video, I have used the same processing pipeline as for the individual test images.
+
+The video can be accessed [here](./project_video_result.mp4)
 
 ---
 
 ###Discussion
 
 ####1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
+The current version of the pipeline does not use any tracking between subsequent frames.
+This means that the pipeline will likely fail in cases of short moments with severe shadows or direct sunlight.
+Unfortunately, I didn't have time to implement this, but I am confident that it would make the pipeline significantly more robust.
 
-Here I'll talk about the approach I took, what techniques I used, what worked and why, where the pipeline might fail and how I might improve it if I were going to pursue this project further.  
+Instead of finding lane-pixels from scratch for each frame in the video, I could use prior information of lane positions from the previous frame and only include thresholded pixels near these in the current frame.
+This would eliminate the time-consuming process of estimating histogram and doing sliding window for each frame.
+Instead, I could check if the two line polynomials agree on the curvature. If they didn't, I could then run the identification of line-pixels from scratch.
 
+Wobbly lines could be eliminated by applying a smoothing filter across frames.
+
+Lastly, better performance could possibly be obtained by finetuning the many thresholds for gradients and colors.
